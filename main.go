@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -188,6 +189,13 @@ func countErrors(doc *goquery.Document) (int, error) {
 
 func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 	baseline1, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
+	payloads := []string{
+		"\" or \"%d\"=\"%d",
+		"' or '%d'='%d",
+		" or %d=%d",
+		"' or '%d'='%d'--",
+		"\" or \"%d\"=\"%d\"--",
+	}
 
 	if err != nil {
 		return
@@ -224,129 +232,51 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 		return
 	}
 
-	if singleQuoteSQLiCheck(baseline1, parsedUrl, param, client) {
-		return
-	}
-
-	if doubleQuoteSQLiCheck(baseline1, parsedUrl, param, client) {
-		return
+	for _, payload := range payloads {
+		if testWithFormattedString(payload, parsedUrl, param, client) {
+			return
+		}
 	}
 }
 
-func doubleQuoteSQLiCheck(baseline Baseline, parsedUrl *url.URL, param string, client *http.Client) bool {
-	trueStatement, err := getRequestResponseInfo(parsedUrl, param, "\" or 1578=1578--", client)
+func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param string, client *http.Client) bool {
+	trueStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, 100, 100), client)
 
 	if err != nil {
 		return false
 	}
 
-	trueStatement2, err := getRequestResponseInfo(parsedUrl, param, "\" or 9852=9852--", client)
+	for i := 0; i < 2; i++ {
+		randInt := rand.Intn(9999)
 
-	if err != nil {
-		return false
+		trueStatement2, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, randInt, randInt), client)
+
+		if err != nil {
+			return false
+		}
+
+		if !cmp.Equal(trueStatement, trueStatement2) {
+			return false
+		}
 	}
 
-	if !cmp.Equal(trueStatement, trueStatement2) {
-		return false
+	for i := 0; i < 2; i++ {
+		randInt1 := rand.Intn(9999)
+		randInt2 := rand.Intn(9999)
+
+		falseStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, randInt1, randInt2), client)
+
+		if err != nil {
+			return false
+		}
+
+		if !sizesSignificantlyDifferent(trueStatement.ContentLength, falseStatement.ContentLength) || falseStatement.Reflections != trueStatement.Reflections {
+			return false
+		}
 	}
 
-	trueStatement3, err := getRequestResponseInfo(parsedUrl, param, "\" or 1184=1184--", client)
-
-	if err != nil {
-		return false
-	}
-
-	if !cmp.Equal(trueStatement, trueStatement3) {
-		return false
-	}
-
-	falseStatement, err := getRequestResponseInfo(parsedUrl, param, "\" and 1576=1578--", client)
-
-	if err != nil {
-		return false
-	}
-
-	if sizesSignificantlyDifferent(trueStatement3.ContentLength, falseStatement.ContentLength) || falseStatement.Reflections != trueStatement3.Reflections {
-		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (boolean based \" or 1=1--)")
-		return true
-	}
-
-	trueStatement4, err := getRequestResponseInfo(parsedUrl, param, "\" or \"9852\"=\"9852", client)
-
-	if err != nil {
-		return false
-	}
-
-	falseStatement2, err := getRequestResponseInfo(parsedUrl, param, "\" and \"1576\"=\"1578", client)
-
-	if err != nil {
-		return false
-	}
-
-	if sizesSignificantlyDifferent(trueStatement4.ContentLength, falseStatement2.ContentLength) || trueStatement4.Reflections != falseStatement2.Reflections {
-		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (boolean based \" or \"1\"=\"1)")
-		return true
-	}
-
-	return false
-}
-
-func singleQuoteSQLiCheck(baseline Baseline, parsedUrl *url.URL, param string, client *http.Client) bool {
-	trueStatement, err := getRequestResponseInfo(parsedUrl, param, "' or 1578=1578--", client)
-
-	if err != nil {
-		return false
-	}
-
-	trueStatement2, err := getRequestResponseInfo(parsedUrl, param, "' or 9852=9852--", client)
-
-	if err != nil {
-		return false
-	}
-
-	if !cmp.Equal(trueStatement, trueStatement2) {
-		return false
-	}
-
-	trueStatement3, err := getRequestResponseInfo(parsedUrl, param, "' or 1154=1154--", client)
-
-	if err != nil {
-		return false
-	}
-
-	if !cmp.Equal(trueStatement, trueStatement3) {
-		return false
-	}
-
-	falseStatement, err := getRequestResponseInfo(parsedUrl, param, "' and 1576=1578--", client)
-
-	if err != nil {
-		return false
-	}
-
-	if sizesSignificantlyDifferent(trueStatement3.ContentLength, falseStatement.ContentLength) || falseStatement.Reflections != trueStatement3.Reflections {
-		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (boolean based ' or 1=1--)")
-		return true
-	}
-
-	trueStatement4, err := getRequestResponseInfo(parsedUrl, param, "' or '9852'='9852", client)
-
-	if err != nil {
-		return false
-	}
-
-	falseStatement2, err := getRequestResponseInfo(parsedUrl, param, "' and '4576'='1578", client)
-
-	if err != nil {
-		return false
-	}
-
-	if sizesSignificantlyDifferent(trueStatement4.ContentLength, falseStatement2.ContentLength) || trueStatement4.Reflections != falseStatement2.Reflections {
-		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (boolean based ' or '1'='1)")
-		return true
-	}
-
-	return false
+	fmt.Println(fmt.Sprintf("SQL in %s on %s -- payload: %s\n", param, parsedUrl.String(), fmt.Sprintf(formattedPayload, 1, 1)))
+	return true
 }
 
 func sizesSignificantlyDifferent(one int, two int) bool {
