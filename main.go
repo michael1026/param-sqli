@@ -49,6 +49,7 @@ func main() {
 	wg := &sync.WaitGroup{}
 
 	if ar == nil {
+		fmt.Println("Error: Must provide a file")
 		return
 	}
 
@@ -86,7 +87,7 @@ func readParameterJson(filepath *string) *chan UrlParam {
 	err = json.Unmarshal(bytes, &arjunResults)
 
 	if err != nil {
-		// fmt.Printf("Unmarshal error: %s\n", err)
+		fmt.Printf("Unmarshal error: %s\n", err)
 		return nil
 	}
 
@@ -121,7 +122,7 @@ func worker(ar *chan UrlParam, client *http.Client, wg *sync.WaitGroup) {
 }
 
 func errorDetection(parsedUrl *url.URL, param string, client *http.Client) (int, error) {
-	payload := "wrtqva'"
+	payload := "wrtqva'\");--//"
 
 	newUrl := addQueryToURL(*parsedUrl, param, payload)
 	doc, err := makeRequestGetDocument(newUrl.String(), client)
@@ -190,11 +191,11 @@ func countErrors(doc *goquery.Document) (int, error) {
 func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 	baseline1, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
 	payloads := []string{
-		"\" or \"%d\"=\"%d",
-		"' or '%d'='%d",
-		" or %d=%d",
-		"' or '%d'='%d'--",
-		"\" or \"%d\"=\"%d\"--",
+		"\" %s \"%d\"=\"%d",
+		"' %s '%d'='%d",
+		" %s %d=%d",
+		"' %s '%d'='%d'--",
+		"\" %s \"%d\"=\"%d\"--",
 	}
 
 	if err != nil {
@@ -228,7 +229,7 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 	}
 
 	if errorCount > baseline1.ErrorCount {
-		fmt.Println(parsedUrl.String() + " in \"" + param + "\" (found extra error in response)")
+		fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "wrtqva'\");--//")
 		return
 	}
 
@@ -240,16 +241,17 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 }
 
 func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param string, client *http.Client) bool {
-	trueStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, 100, 100), client)
+	trueStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "or", 100, 100), client)
 
 	if err != nil {
+		fmt.Printf("Some error: %s\n", err)
 		return false
 	}
 
 	for i := 0; i < 2; i++ {
 		randInt := rand.Intn(9999)
 
-		trueStatement2, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, randInt, randInt), client)
+		trueStatement2, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "or", randInt, randInt), client)
 
 		if err != nil {
 			return false
@@ -264,7 +266,7 @@ func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param 
 		randInt1 := rand.Intn(9999)
 		randInt2 := rand.Intn(9999)
 
-		falseStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, randInt1, randInt2), client)
+		falseStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "and", randInt1, randInt2), client)
 
 		if err != nil {
 			return false
@@ -275,14 +277,14 @@ func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param 
 		}
 	}
 
-	fmt.Println(fmt.Sprintf("SQL in %s on %s -- payload: %s\n", param, parsedUrl.String(), fmt.Sprintf(formattedPayload, 1, 1)))
+	fmt.Printf(fmt.Sprintf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), fmt.Sprintf(formattedPayload, "or", 1, 1)))
 	return true
 }
 
 func sizesSignificantlyDifferent(one int, two int) bool {
-	if ((two / one) * 100) > 110 {
+	if ((float64(two) / float64(one)) * 100) > 105 {
 		return true
-	} else if ((one / two) * 100) > 110 {
+	} else if ((float64(one) / float64(two)) * 100) > 105 {
 		return true
 	}
 	return false
