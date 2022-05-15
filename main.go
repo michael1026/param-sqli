@@ -280,7 +280,6 @@ func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param 
 	trueStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "or", 100, 100), client)
 
 	if err != nil {
-		fmt.Printf("Some error: %s\n", err)
 		return false
 	}
 
