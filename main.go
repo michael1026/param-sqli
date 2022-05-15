@@ -17,6 +17,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/go-cmp/cmp"
+	"github.com/michael1026/param-sqli/payloads"
 	"github.com/michael1026/param-sqli/util"
 	"github.com/projectdiscovery/fastdialer/fastdialer"
 )
@@ -38,6 +39,7 @@ type Baseline struct {
 	ErrorCount    int
 	ContentLength int
 	Reflections   int
+	StatusCode    int
 }
 
 func main() {
@@ -189,7 +191,6 @@ func countErrors(doc *goquery.Document) (int, error) {
 }
 
 func scanner(parsedUrl *url.URL, param string, client *http.Client) {
-	baseline1, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
 	payloads := []string{
 		"\" %s \"%d\"=\"%d",
 		"' %s '%d'='%d",
@@ -198,8 +199,20 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 		"\" %s \"%d\"=\"%d\"--",
 	}
 
+	baseline1, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
+	if err != nil || baseline1.StatusCode != http.StatusOK {
+		return
+	}
+
+	errorBaseline, err := getRequestResponseInfo(parsedUrl, param, "0`z'z\"${{%25{{\\", client)
 	if err != nil {
 		return
+	}
+
+	if errorBaseline.StatusCode == http.StatusInternalServerError {
+		if testWithErrorPayloads(parsedUrl, param, client) {
+			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0`z'z\"${{%25{{\\")
+		}
 	}
 
 	baseline2, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
@@ -238,6 +251,29 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 			return
 		}
 	}
+}
+
+func testWithErrorPayloads(parsedUrl *url.URL, param string, client *http.Client) (sqliFound bool) {
+	errorPayloads := payloads.ErrorPayloads()
+	successPayloads := payloads.SuccessPayloads()
+
+	for _, payload := range errorPayloads {
+		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
+
+		if err != nil || result.StatusCode != http.StatusInternalServerError {
+			return false
+		}
+	}
+
+	for _, payload := range successPayloads {
+		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
+
+		if err != nil || result.StatusCode != http.StatusOK {
+			return false
+		}
+	}
+
+	return true
 }
 
 func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param string, client *http.Client) bool {
