@@ -139,7 +139,7 @@ func getRequestResponseInfo(parsedUrl *url.URL, param string, payload string, cl
 	baseline := Baseline{}
 
 	newUrl := addQueryToURL(*parsedUrl, param, payload)
-	doc, err := makeRequestGetDocument(newUrl.String(), client)
+	doc, status, err := makeRequestGetDocument(newUrl.String(), client)
 
 	if err != nil || doc == nil {
 		return baseline, errors.New("Error making baseline request")
@@ -161,6 +161,7 @@ func getRequestResponseInfo(parsedUrl *url.URL, param string, payload string, cl
 	baseline.Url = parsedUrl.String()
 	baseline.ErrorCount = errorCount
 	baseline.Reflections = countReflections(doc, payload)
+	baseline.StatusCode = status
 
 	return baseline, nil
 }
@@ -355,16 +356,16 @@ func buildHttpClient() (c *http.Client) {
 	return client
 }
 
-func makeRequestGetDocument(rawUrl string, client *http.Client) (doc *goquery.Document, err error) {
+func makeRequestGetDocument(rawUrl string, client *http.Client) (doc *goquery.Document, status int, err error) {
 	req, err := http.NewRequest("GET", rawUrl, nil)
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 	req.Header.Set("Connection", "close")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 
 	defer resp.Body.Close()
@@ -372,10 +373,10 @@ func makeRequestGetDocument(rawUrl string, client *http.Client) (doc *goquery.Do
 	doc, err = goquery.NewDocumentFromReader(resp.Body)
 
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 
-	return doc, nil
+	return doc, resp.StatusCode, nil
 }
 
 func countReflections(doc *goquery.Document, canary string) int {
