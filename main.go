@@ -127,8 +127,8 @@ func errorDetection(parsedUrl *url.URL, param string, client *http.Client) (int,
 	payload := "wrtqva'\");--//"
 
 	newUrl := addQueryToURL(*parsedUrl, param, payload)
-	doc, err := makeRequestGetDocument(newUrl.String(), client)
-	if err != nil {
+	doc, status, err := makeRequestGetDocument(newUrl.String(), client)
+	if err != nil || status != http.StatusOK {
 		return 0, errors.New("Request unsuccessful")
 	}
 
