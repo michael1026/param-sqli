@@ -210,8 +210,8 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 		return
 	}
 
-	if errorBaseline.StatusCode == http.StatusInternalServerError {
-		if testWithErrorPayloads(parsedUrl, param, client) {
+	if errorBaseline.StatusCode == http.StatusInternalServerError || errorBaseline.ErrorCount > baseline1.ErrorCount {
+		if testWithErrorPayloads(parsedUrl, param, baseline1.ErrorCount, client) {
 			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0`z'z\"${{%25{{\\")
 		}
 	}
@@ -224,23 +224,16 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 	}
 
 	if !cmp.Equal(baseline1, baseline2) {
-		// fmt.Printf("URL is unstable\n")
 		return
 	}
 
 	baseline3, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
 
 	if !cmp.Equal(baseline2, baseline3) {
-		// fmt.Printf("URL is unstable\n")
 		return
 	}
 
-	errorCount, err := errorDetection(parsedUrl, param, client)
-
-	if err != nil {
-		// possibly sqli?
-		return
-	}
+	errorCount, _ := errorDetection(parsedUrl, param, client)
 
 	if errorCount > baseline1.ErrorCount {
 		fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "wrtqva'\");--//")
@@ -254,14 +247,14 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 	}
 }
 
-func testWithErrorPayloads(parsedUrl *url.URL, param string, client *http.Client) (sqliFound bool) {
+func testWithErrorPayloads(parsedUrl *url.URL, param string, baselineErrorCount int, client *http.Client) (sqliFound bool) {
 	errorPayloads := payloads.ErrorPayloads()
 	successPayloads := payloads.SuccessPayloads()
 
 	for _, payload := range errorPayloads {
 		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
 
-		if err != nil || result.StatusCode != http.StatusInternalServerError {
+		if err != nil || (result.StatusCode != http.StatusInternalServerError && result.ErrorCount > baselineErrorCount) {
 			return false
 		}
 	}
@@ -269,7 +262,7 @@ func testWithErrorPayloads(parsedUrl *url.URL, param string, client *http.Client
 	for _, payload := range successPayloads {
 		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
 
-		if err != nil || result.StatusCode != http.StatusOK {
+		if err != nil || result.StatusCode != http.StatusOK || result.ErrorCount > baselineErrorCount {
 			return false
 		}
 	}
@@ -278,7 +271,7 @@ func testWithErrorPayloads(parsedUrl *url.URL, param string, client *http.Client
 }
 
 func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param string, client *http.Client) bool {
-	trueStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "or", 100, 100), client)
+	trueStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "or", 1000, 1000), client)
 
 	if err != nil {
 		return false
