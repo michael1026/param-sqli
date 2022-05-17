@@ -289,7 +289,7 @@ func testWithErrorPayloads(parsedUrl *url.URL, param string, baseline Baseline, 
 func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param string, client *http.Client) bool {
 	trueStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "or", 1000, 1000), client)
 
-	if err != nil {
+	if err != nil || trueStatement.StatusCode != http.StatusOK {
 		return false
 	}
 
@@ -298,7 +298,7 @@ func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param 
 
 		trueStatement2, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "or", randInt, randInt), client)
 
-		if err != nil {
+		if err != nil || trueStatement2.StatusCode != http.StatusOK {
 			return false
 		}
 
@@ -313,7 +313,7 @@ func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param 
 
 		falseStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "and", randInt1, randInt2), client)
 
-		if err != nil {
+		if err != nil || falseStatement.StatusCode != http.StatusOK {
 			return false
 		}
 
