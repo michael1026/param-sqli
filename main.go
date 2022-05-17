@@ -35,11 +35,12 @@ type UrlParam struct {
 }
 
 type Baseline struct {
-	Url           string
-	ErrorCount    int
-	ContentLength int
-	Reflections   int
-	StatusCode    int
+	Url               string
+	SQLErrorCount     int
+	ContentLength     int
+	Reflections       int
+	StatusCode        int
+	GenericErrorCount int
 }
 
 func main() {
@@ -132,7 +133,7 @@ func errorDetection(parsedUrl *url.URL, param string, client *http.Client) (int,
 		return 0, errors.New("Request unsuccessful")
 	}
 
-	return countErrors(doc)
+	return countSQLErrors(doc)
 }
 
 func getRequestResponseInfo(parsedUrl *url.URL, param string, payload string, client *http.Client) (Baseline, error) {
@@ -145,7 +146,8 @@ func getRequestResponseInfo(parsedUrl *url.URL, param string, payload string, cl
 		return baseline, errors.New("Error making baseline request")
 	}
 
-	errorCount, err := countErrors(doc)
+	sqlErrorCount, err := countSQLErrors(doc)
+	genericErrorCount, err := countGenericErrors(doc)
 
 	if err != nil {
 		return baseline, errors.New("Error counting errors")
@@ -159,14 +161,15 @@ func getRequestResponseInfo(parsedUrl *url.URL, param string, payload string, cl
 
 	baseline.ContentLength = len(html)
 	baseline.Url = parsedUrl.String()
-	baseline.ErrorCount = errorCount
+	baseline.SQLErrorCount = sqlErrorCount
+	baseline.GenericErrorCount = genericErrorCount
 	baseline.Reflections = countReflections(doc, payload)
 	baseline.StatusCode = status
 
 	return baseline, nil
 }
 
-func countErrors(doc *goquery.Document) (int, error) {
+func countSQLErrors(doc *goquery.Document) (int, error) {
 	html, err := doc.Html()
 
 	if err != nil {
@@ -175,7 +178,7 @@ func countErrors(doc *goquery.Document) (int, error) {
 
 	count := 0
 
-	errors := []string{
+	sqlErrors := []string{
 		"error in your SQL syntax",
 		"mysql_numrows()",
 		"Input String was not in a correct format",
@@ -184,9 +187,22 @@ func countErrors(doc *goquery.Document) (int, error) {
 		"Unclosed quotation mark",
 	}
 
-	for _, error := range errors {
+	for _, error := range sqlErrors {
 		count += strings.Count(html, error)
 	}
+
+	return count, nil
+}
+
+func countGenericErrors(doc *goquery.Document) (int, error) {
+	html, err := doc.Html()
+
+	if err != nil {
+		return 0, err
+	}
+
+	count := strings.Count(html, "error")
+	count += strings.Count(html, "Error")
 
 	return count, nil
 }
@@ -210,8 +226,8 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 		return
 	}
 
-	if errorBaseline.StatusCode == http.StatusInternalServerError || errorBaseline.ErrorCount > baseline1.ErrorCount {
-		if testWithErrorPayloads(parsedUrl, param, baseline1.ErrorCount, client) {
+	if errorBaseline.StatusCode == http.StatusInternalServerError || errorBaseline.SQLErrorCount > baseline1.SQLErrorCount || errorBaseline.GenericErrorCount > baseline1.GenericErrorCount {
+		if testWithErrorPayloads(parsedUrl, param, baseline1, client) {
 			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0`z'z\"${{%25{{\\")
 		}
 	}
@@ -235,7 +251,7 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 
 	errorCount, _ := errorDetection(parsedUrl, param, client)
 
-	if errorCount > baseline1.ErrorCount {
+	if errorCount > baseline1.SQLErrorCount {
 		fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "wrtqva'\");--//")
 		return
 	}
@@ -247,14 +263,14 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 	}
 }
 
-func testWithErrorPayloads(parsedUrl *url.URL, param string, baselineErrorCount int, client *http.Client) (sqliFound bool) {
+func testWithErrorPayloads(parsedUrl *url.URL, param string, baseline Baseline, client *http.Client) (sqliFound bool) {
 	errorPayloads := payloads.ErrorPayloads()
 	successPayloads := payloads.SuccessPayloads()
 
 	for _, payload := range errorPayloads {
 		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
 
-		if err != nil || (result.StatusCode != http.StatusInternalServerError && result.ErrorCount > baselineErrorCount) {
+		if err != nil || (result.StatusCode != http.StatusInternalServerError && result.SQLErrorCount == baseline.SQLErrorCount && result.GenericErrorCount == result.GenericErrorCount) {
 			return false
 		}
 	}
@@ -262,7 +278,7 @@ func testWithErrorPayloads(parsedUrl *url.URL, param string, baselineErrorCount 
 	for _, payload := range successPayloads {
 		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
 
-		if err != nil || result.StatusCode != http.StatusOK || result.ErrorCount > baselineErrorCount {
+		if err != nil || result.StatusCode != http.StatusOK || result.SQLErrorCount > baseline.SQLErrorCount || result.GenericErrorCount > baseline.GenericErrorCount {
 			return false
 		}
 	}
