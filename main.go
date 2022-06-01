@@ -270,7 +270,13 @@ func testWithErrorPayloads(parsedUrl *url.URL, param string, baseline Baseline, 
 	for _, payload := range errorPayloads {
 		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
 
-		if err != nil || (result.StatusCode != http.StatusInternalServerError && result.SQLErrorCount == baseline.SQLErrorCount && result.GenericErrorCount == result.GenericErrorCount) {
+		// something wrong with the request.
+		if err != nil {
+			return false
+		}
+
+		// if everything seems normal, return false
+		if result.StatusCode != http.StatusInternalServerError && result.SQLErrorCount == baseline.SQLErrorCount && result.GenericErrorCount == baseline.GenericErrorCount && !sizesSignificantlyDifferent(result.ContentLength, baseline.ContentLength) {
 			return false
 		}
 	}
@@ -278,7 +284,12 @@ func testWithErrorPayloads(parsedUrl *url.URL, param string, baseline Baseline, 
 	for _, payload := range successPayloads {
 		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
 
-		if err != nil || result.StatusCode != http.StatusOK || result.SQLErrorCount > baseline.SQLErrorCount || result.GenericErrorCount > baseline.GenericErrorCount {
+		// something wrong with the request.
+		if err != nil {
+			return false
+		}
+
+		if err != nil || result.StatusCode != http.StatusOK || result.SQLErrorCount > baseline.SQLErrorCount || result.GenericErrorCount > baseline.GenericErrorCount || sizesSignificantlyDifferent(result.ContentLength, baseline.ContentLength) {
 			return false
 		}
 	}
