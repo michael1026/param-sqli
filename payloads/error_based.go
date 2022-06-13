@@ -11,7 +11,7 @@ func SuccessPayloads() []string {
 func ErrorPayloads() []string {
 	return []string{
 		`'`,
-		`||''`,
+		`'||''`,
 		`z||'z(z'z`,
 	}
 }
