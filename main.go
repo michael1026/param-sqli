@@ -208,13 +208,13 @@ func countGenericErrors(doc *goquery.Document) (int, error) {
 }
 
 func scanner(parsedUrl *url.URL, param string, client *http.Client) {
-	formattedPayloads := []string{
-		"\" %s \"%d\"=\"%d",
-		"' %s '%d'='%d",
-		" %s %d=%d",
-		"' %s '%d'='%d'--",
-		"\" %s \"%d\"=\"%d\"--",
-	}
+	// formattedPayloads := []string{
+	// 	"\" %s \"%d\"=\"%d",
+	// 	"' %s '%d'='%d",
+	// 	" %s %d=%d",
+	// 	"' %s '%d'='%d'--",
+	// 	"\" %s \"%d\"=\"%d\"--",
+	// }
 
 	baseline1, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
 	if err != nil || baseline1.StatusCode != http.StatusOK {
@@ -240,35 +240,35 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 		}
 	}
 
-	baseline2, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
+	// baseline2, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
 
-	if err != nil {
-		// fmt.Printf("URL is unstable\n")
-		return
-	}
+	// if err != nil {
+	// 	// fmt.Printf("URL is unstable\n")
+	// 	return
+	// }
 
-	if !cmp.Equal(baseline1, baseline2) {
-		return
-	}
+	// if !cmp.Equal(baseline1, baseline2) {
+	// 	return
+	// }
 
-	baseline3, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
+	// baseline3, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
 
-	if !cmp.Equal(baseline2, baseline3) {
-		return
-	}
+	// if !cmp.Equal(baseline2, baseline3) {
+	// 	return
+	// }
 
-	errorCount, _ := errorDetection(parsedUrl, param, client)
+	// errorCount, _ := errorDetection(parsedUrl, param, client)
 
-	if errorCount > baseline1.SQLErrorCount {
-		fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "wrtqva'\");--//")
-		return
-	}
+	// if errorCount > baseline1.SQLErrorCount {
+	// 	fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "wrtqva'\");--//")
+	// 	return
+	// }
 
-	for _, payload := range formattedPayloads {
-		if testWithFormattedString(payload, parsedUrl, param, client) {
-			return
-		}
-	}
+	// for _, payload := range formattedPayloads {
+	// 	if testWithFormattedString(payload, parsedUrl, param, client) {
+	// 		return
+	// 	}
+	// }
 }
 
 func testWithErrorPayloads(successPayloads []string, errorPayloads []string, parsedUrl *url.URL, param string, baseline Baseline, client *http.Client) (sqliFound bool) {
