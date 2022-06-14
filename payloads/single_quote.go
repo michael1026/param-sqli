@@ -1,6 +1,6 @@
 package payloads
 
-func SuccessPayloads() []string {
+func SingleQuoteSuccessPayloads() []string {
 	return []string{
 		`"`,
 		`'||''||'`,
@@ -8,7 +8,7 @@ func SuccessPayloads() []string {
 	}
 }
 
-func ErrorPayloads() []string {
+func SingleQuoteErrorPayloads() []string {
 	return []string{
 		`'`,
 		`'||''`,

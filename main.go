@@ -208,7 +208,7 @@ func countGenericErrors(doc *goquery.Document) (int, error) {
 }
 
 func scanner(parsedUrl *url.URL, param string, client *http.Client) {
-	payloads := []string{
+	formattedPayloads := []string{
 		"\" %s \"%d\"=\"%d",
 		"' %s '%d'='%d",
 		" %s %d=%d",
@@ -227,8 +227,16 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 	}
 
 	if errorBaseline.StatusCode == http.StatusInternalServerError || errorBaseline.SQLErrorCount > baseline1.SQLErrorCount || errorBaseline.GenericErrorCount > baseline1.GenericErrorCount {
-		if testWithErrorPayloads(parsedUrl, param, baseline1, client) {
-			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0`z'z\"${{%25{{\\")
+		if testWithErrorPayloads(payloads.SingleQuoteSuccessPayloads(), payloads.SingleQuoteErrorPayloads(), parsedUrl, param, baseline1, client) {
+			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0'")
+		}
+
+		if testWithErrorPayloads(payloads.DoubleQuoteSuccessPayloads(), payloads.DoubleQuoteErrorPayloads(), parsedUrl, param, baseline1, client) {
+			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0\"")
+		}
+
+		if testWithErrorPayloads(payloads.NoQuoteSuccessPayloads(), payloads.NoQuoteErrorPayloads(), parsedUrl, param, baseline1, client) {
+			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0'\"")
 		}
 	}
 
@@ -256,17 +264,14 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 		return
 	}
 
-	for _, payload := range payloads {
+	for _, payload := range formattedPayloads {
 		if testWithFormattedString(payload, parsedUrl, param, client) {
 			return
 		}
 	}
 }
 
-func testWithErrorPayloads(parsedUrl *url.URL, param string, baseline Baseline, client *http.Client) (sqliFound bool) {
-	errorPayloads := payloads.ErrorPayloads()
-	successPayloads := payloads.SuccessPayloads()
-
+func testWithErrorPayloads(successPayloads []string, errorPayloads []string, parsedUrl *url.URL, param string, baseline Baseline, client *http.Client) (sqliFound bool) {
 	for _, payload := range errorPayloads {
 		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
 
