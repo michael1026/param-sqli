@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -23,15 +24,21 @@ import (
 )
 
 type CookieInfo map[string]string
-type ArjunResult struct {
-	Params []string `json:"params"`
+type ParamResult struct {
+	Params []Param `json:"params"`
 }
 
-type ArjunResults map[string]ArjunResult
+type Param struct {
+	Method string   `json:"method"`
+	Names  []string `json:"names"`
+}
+
+type ArjunResults map[string]ParamResult
 
 type UrlParam struct {
 	url    string
 	params []string
+	method string
 }
 
 type Baseline struct {
@@ -85,7 +92,11 @@ func readParameterJson(filepath *string) *chan UrlParam {
 
 	defer jsonFile.Close()
 
-	bytes, _ := ioutil.ReadAll(jsonFile)
+	bytes, err := ioutil.ReadAll(jsonFile)
+
+	if err != nil {
+		fmt.Printf("error reading bytes %s\n", err)
+	}
 
 	err = json.Unmarshal(bytes, &arjunResults)
 
@@ -96,8 +107,10 @@ func readParameterJson(filepath *string) *chan UrlParam {
 
 	urlParams := make(chan UrlParam, len(arjunResults))
 
-	for rawUrl, params := range arjunResults {
-		urlParams <- UrlParam{rawUrl, params.Params}
+	for rawUrl, paramResult := range arjunResults {
+		for _, params := range paramResult.Params {
+			urlParams <- UrlParam{rawUrl, params.Names, params.Method}
+		}
 	}
 
 	return &urlParams
@@ -119,16 +132,25 @@ func worker(ar *chan UrlParam, client *http.Client, wg *sync.WaitGroup) {
 				return
 			}
 
-			scanner(parsedUrl, param, client)
+			scanner(parsedUrl, param, client, urlParam.method)
 		}
 	}
 }
 
-func errorDetection(parsedUrl *url.URL, param string, client *http.Client) (int, error) {
+func errorDetection(parsedUrl *url.URL, method string, param string, client *http.Client) (int, error) {
 	payload := "wrtqva'\");--//"
+	var newUrl url.URL
+	var query io.Reader
 
-	newUrl := addQueryToURL(*parsedUrl, param, payload)
-	doc, status, err := makeRequestGetDocument(newUrl.String(), client)
+	if method == "GET" {
+		newUrl = addQueryToURL(*parsedUrl, param, payload)
+	} else {
+		newUrl = *parsedUrl
+		queryString := fmt.Sprintf("%s=%s", param, payload)
+		query = strings.NewReader(queryString)
+	}
+
+	doc, status, err := makeRequestGetDocument(newUrl.String(), method, query, client)
 	if err != nil || status != http.StatusOK {
 		return 0, errors.New("Request unsuccessful")
 	}
@@ -136,11 +158,19 @@ func errorDetection(parsedUrl *url.URL, param string, client *http.Client) (int,
 	return countSQLErrors(doc)
 }
 
-func getRequestResponseInfo(parsedUrl *url.URL, param string, payload string, client *http.Client) (Baseline, error) {
+func getRequestResponseInfo(parsedUrl *url.URL, method string, param string, payload string, client *http.Client) (Baseline, error) {
 	baseline := Baseline{}
+	var newUrl url.URL
+	var query io.Reader
 
-	newUrl := addQueryToURL(*parsedUrl, param, payload)
-	doc, status, err := makeRequestGetDocument(newUrl.String(), client)
+	if method == "GET" {
+		newUrl = addQueryToURL(*parsedUrl, param, payload)
+	} else {
+		newUrl = *parsedUrl
+		queryString := fmt.Sprintf("%s=%s", param, payload)
+		query = strings.NewReader(queryString)
+	}
+	doc, status, err := makeRequestGetDocument(newUrl.String(), method, query, client)
 
 	if err != nil || doc == nil {
 		return baseline, errors.New("Error making baseline request")
@@ -207,7 +237,7 @@ func countGenericErrors(doc *goquery.Document) (int, error) {
 	return count, nil
 }
 
-func scanner(parsedUrl *url.URL, param string, client *http.Client) {
+func scanner(parsedUrl *url.URL, param string, client *http.Client, method string) {
 	// formattedPayloads := []string{
 	// 	"\" %s \"%d\"=\"%d",
 	// 	"' %s '%d'='%d",
@@ -216,26 +246,27 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 	// 	"\" %s \"%d\"=\"%d\"--",
 	// }
 
-	baseline1, err := getRequestResponseInfo(parsedUrl, param, util.RandString(5), client)
+	baseline1, err := getRequestResponseInfo(parsedUrl, method, param, util.RandString(5), client)
 	if err != nil || baseline1.StatusCode != http.StatusOK {
 		return
 	}
 
-	errorBaseline, err := getRequestResponseInfo(parsedUrl, param, "0`z'z\"${{%25{{\\", client)
+	errorBaseline, err := getRequestResponseInfo(parsedUrl, method, param, "0`z'z\"${{%25{{\\", client)
 	if err != nil {
+		fmt.Println("returning 2")
 		return
 	}
 
 	if errorBaseline.StatusCode == http.StatusInternalServerError || errorBaseline.SQLErrorCount > baseline1.SQLErrorCount || errorBaseline.GenericErrorCount > baseline1.GenericErrorCount {
-		if testWithErrorPayloads(payloads.SingleQuoteSuccessPayloads(), payloads.SingleQuoteErrorPayloads(), parsedUrl, param, baseline1, client) {
+		if testWithErrorPayloads(payloads.SingleQuoteSuccessPayloads(), payloads.SingleQuoteErrorPayloads(), parsedUrl, method, param, baseline1, client) {
 			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0'")
 		}
 
-		if testWithErrorPayloads(payloads.DoubleQuoteSuccessPayloads(), payloads.DoubleQuoteErrorPayloads(), parsedUrl, param, baseline1, client) {
+		if testWithErrorPayloads(payloads.DoubleQuoteSuccessPayloads(), payloads.DoubleQuoteErrorPayloads(), parsedUrl, method, param, baseline1, client) {
 			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0\"")
 		}
 
-		if testWithErrorPayloads(payloads.NoQuoteSuccessPayloads(), payloads.NoQuoteErrorPayloads(), parsedUrl, param, baseline1, client) {
+		if testWithErrorPayloads(payloads.NoQuoteSuccessPayloads(), payloads.NoQuoteErrorPayloads(), parsedUrl, method, param, baseline1, client) {
 			fmt.Printf("SQLi in %s on %s. Payload: %s\n", param, parsedUrl.String(), "0'\"")
 		}
 	}
@@ -271,9 +302,9 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client) {
 	// }
 }
 
-func testWithErrorPayloads(successPayloads []string, errorPayloads []string, parsedUrl *url.URL, param string, baseline Baseline, client *http.Client) (sqliFound bool) {
+func testWithErrorPayloads(successPayloads []string, errorPayloads []string, parsedUrl *url.URL, method string, param string, baseline Baseline, client *http.Client) (sqliFound bool) {
 	for _, payload := range errorPayloads {
-		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
+		result, err := getRequestResponseInfo(parsedUrl, method, param, payload, client)
 
 		// something wrong with the request.
 		if err != nil {
@@ -287,7 +318,7 @@ func testWithErrorPayloads(successPayloads []string, errorPayloads []string, par
 	}
 
 	for _, payload := range successPayloads {
-		result, err := getRequestResponseInfo(parsedUrl, param, payload, client)
+		result, err := getRequestResponseInfo(parsedUrl, method, param, payload, client)
 
 		// something wrong with the request.
 		if err != nil {
@@ -302,8 +333,8 @@ func testWithErrorPayloads(successPayloads []string, errorPayloads []string, par
 	return true
 }
 
-func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param string, client *http.Client) bool {
-	trueStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "or", 1000, 1000), client)
+func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, method string, param string, client *http.Client) bool {
+	trueStatement, err := getRequestResponseInfo(parsedUrl, method, param, fmt.Sprintf(formattedPayload, "or", 1000, 1000), client)
 
 	if err != nil || trueStatement.StatusCode != http.StatusOK {
 		return false
@@ -312,7 +343,7 @@ func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param 
 	for i := 0; i < 2; i++ {
 		randInt := rand.Intn(9999)
 
-		trueStatement2, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "or", randInt, randInt), client)
+		trueStatement2, err := getRequestResponseInfo(parsedUrl, method, param, fmt.Sprintf(formattedPayload, "or", randInt, randInt), client)
 
 		if err != nil || trueStatement2.StatusCode != http.StatusOK {
 			return false
@@ -327,7 +358,7 @@ func testWithFormattedString(formattedPayload string, parsedUrl *url.URL, param 
 		randInt1 := rand.Intn(9999)
 		randInt2 := rand.Intn(9999)
 
-		falseStatement, err := getRequestResponseInfo(parsedUrl, param, fmt.Sprintf(formattedPayload, "and", randInt1, randInt2), client)
+		falseStatement, err := getRequestResponseInfo(parsedUrl, method, param, fmt.Sprintf(formattedPayload, "and", randInt1, randInt2), client)
 
 		if err != nil || falseStatement.StatusCode != http.StatusOK {
 			return false
@@ -362,7 +393,7 @@ func buildHttpClient() (c *http.Client) {
 
 	transport := &http.Transport{
 		MaxIdleConns:      -1,
-		IdleConnTimeout:   time.Second,
+		IdleConnTimeout:   5 * time.Second,
 		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
 		DisableKeepAlives: true,
 		DialContext:       dialer.Dial,
@@ -375,14 +406,14 @@ func buildHttpClient() (c *http.Client) {
 	client := &http.Client{
 		Transport:     transport,
 		CheckRedirect: re,
-		Timeout:       time.Second * 5,
+		Timeout:       time.Second * 10,
 	}
 
 	return client
 }
 
-func makeRequestGetDocument(rawUrl string, client *http.Client) (doc *goquery.Document, status int, err error) {
-	req, err := http.NewRequest("GET", rawUrl, nil)
+func makeRequestGetDocument(rawUrl string, method string, body io.Reader, client *http.Client) (doc *goquery.Document, status int, err error) {
+	req, err := http.NewRequest(method, rawUrl, body)
 	if err != nil {
 		return nil, -1, err
 	}
