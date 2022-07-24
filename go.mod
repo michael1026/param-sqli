@@ -9,6 +9,7 @@ require (
 	github.com/dimchansky/utfbom v1.1.1 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/go-cmp v0.5.6 // indirect
+	github.com/michael1026/sessionManager v0.0.0-20210624021340-8b15b51dca85 // indirect
 	github.com/miekg/dns v1.1.43 // indirect
 	github.com/projectdiscovery/blackrock v0.0.0-20210415162320-b38689ae3a2e // indirect
 	github.com/projectdiscovery/cryptoutil v0.0.0-20210805184155-b5d2512f9345 // indirect
