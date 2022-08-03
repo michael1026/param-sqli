@@ -253,7 +253,6 @@ func scanner(parsedUrl *url.URL, param string, client *http.Client, method strin
 
 	errorBaseline, err := getRequestResponseInfo(parsedUrl, method, param, "0`z'z\"${{%25{{\\", client)
 	if err != nil {
-		fmt.Println("returning 2")
 		return
 	}
 
